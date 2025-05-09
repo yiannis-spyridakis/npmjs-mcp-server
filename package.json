@@ -1,0 +1,44 @@
+{
+  "name": "npmjs-mcp-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "homepage": "https://github.com/yiannis-spyridakis/npmjs-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/yiannis-spyridakis/npmjs-mcp-server/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yiannis-spyridakis/npmjs-mcp-server.git"
+  },
+  "scripts": {
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "watch": "nodemon --watch src --ext ts --exec \"node --loader ts-node/esm src/index.ts\""
+  },
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "npm",
+    "npmjs",
+    "package information",
+    "api",
+    "typescript"
+  ],
+  "author": "Yiannis Spyridakis",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.1",
+    "axios": "^1.9.0",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "dotenv": "^16.5.0",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
