@@ -394,8 +394,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // CallTool Handler
 server.setRequestHandler(
   CallToolRequestSchema,
-  async (request: CallToolRequest): Promise<any> => {
-    // Return Promise<any> for now
+  async (
+    request: CallToolRequest
+  ): Promise<{
+    content: Array<{ type: string; text?: string; data?: any }>;
+    isError: boolean;
+  }> => {
     const { name: toolName, arguments: args } = request.params;
 
     // Validate arguments using Zod
@@ -418,32 +422,39 @@ server.setRequestHandler(
     const encodedPackageName = encodePackageName(validatedArgs.packageName);
 
     try {
+      let resultData: any;
       switch (toolName) {
         case 'get_npm_package_summary': {
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
-          return transformDataForSummary(rawData, sourceUrl);
+          resultData = transformDataForSummary(rawData, sourceUrl);
+          break;
         }
         case 'get_npm_package_versions': {
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
-          return transformDataForVersions(rawData, sourceUrl);
+          resultData = transformDataForVersions(rawData, sourceUrl);
+          break;
         }
         case 'get_npm_package_downloads': {
-          // validatedArgs could be PackageNameArgs or PackageDownloadsArgs
-          // If it's PackageDownloadsArgs, it might have a period.
           const period =
             'period' in validatedArgs ? validatedArgs.period : undefined;
-          return fetchPackageDownloads(encodedPackageName, period);
+          resultData = await fetchPackageDownloads(encodedPackageName, period);
+          break;
         }
         case 'get_npm_package_details': {
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
-          return transformDataForDetails(rawData, sourceUrl);
+          resultData = transformDataForDetails(rawData, sourceUrl);
+          break;
         }
         default:
           throw new Error(`Tool '${toolName}' not found or not implemented.`);
       }
+      return {
+        content: [{ type: 'text', text: JSON.stringify(resultData) }],
+        isError: false
+      };
     } catch (error) {
       if (error instanceof NpmApiError) {
         // Re-throw with a simple message; SDK handles formatting
