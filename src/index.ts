@@ -390,6 +390,23 @@ const SimulateNpmAuditFixArgsSchema = z.object({
 });
 type SimulateNpmAuditFixArgs = z.infer<typeof SimulateNpmAuditFixArgsSchema>;
 
+// --- Zod Schemas for Prompt Arguments ---
+// Reusing PackageNameArgsSchema for prompts needing only packageName
+// Reusing NpmAuditArgsSchema for prompts needing only projectPath
+// Reusing SimulateNpmAuditFixArgsSchema for prompts needing only projectPath
+
+const GetVersionDateArgsSchema = z.object({
+  packageName: z.string().min(1, 'Package name cannot be empty'),
+  version: z.string().min(1, 'Version cannot be empty') // Basic validation, could be stricter regex
+});
+type GetVersionDateArgs = z.infer<typeof GetVersionDateArgsSchema>;
+
+const GetDownloadsArgsSchema = z.object({
+  packageName: z.string().min(1, 'Package name cannot be empty'),
+  timePeriod: z.enum(['last-day', 'last-week', 'last-month'])
+});
+type GetDownloadsArgs = z.infer<typeof GetDownloadsArgsSchema>;
+
 // --- Tool Implementations ---
 
 server.tool(
@@ -694,35 +711,193 @@ server.tool(
 );
 
 // --- Prompt Implementations ---
-const PlaceholderPromptInputSchema = z.object({
-  variable: z.string().describe('A placeholder variable.')
-});
 
+// 1. Get Summary Prompt
 server.prompt(
-  'placeholder-prompt',
-  'A standard placeholder prompt for demonstration purposes.', // Boilerplate description
-  PlaceholderPromptInputSchema.shape,
-  async (
-    args: z.infer<typeof PlaceholderPromptInputSchema>
-  ): Promise<GetPromptResult> => {
-    try {
-      return {
-        description:
-          'A standard placeholder prompt for demonstration purposes.', // Boilerplate description
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `This is a placeholder template for the variable: ${args.variable}.` // Boilerplate template text
-            }
+  'get_summary_prompt',
+  'Generates a request to get a quick summary of a specified npm package.',
+  PackageNameArgsSchema.shape,
+  async (args: PackageNameArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request to get a quick summary of the '${args.packageName}' npm package.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `Get a quick summary of the '${args.packageName}' npm package.`
           }
-        ]
-      };
-    } catch (error) {
-      console.error(`Error in placeholder-prompt: ${(error as Error).message}`);
-      throw error;
-    }
+        }
+      ]
+    };
+  }
+);
+
+// 2. Get Details Prompt
+server.prompt(
+  'get_details_prompt',
+  'Generates a request for full details of a specified npm package, including maintainers and repository URL.',
+  PackageNameArgsSchema.shape,
+  async (args: PackageNameArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request for full details of the '${args.packageName}' package.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `Show me the full details for '${args.packageName}', including its repository URL and maintainers.`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 3. Find Homepage Prompt
+server.prompt(
+  'find_homepage_prompt',
+  'Generates a request to find the official homepage for a specified npm package.',
+  PackageNameArgsSchema.shape,
+  async (args: PackageNameArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request to find the official homepage for the '${args.packageName}' package.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `What is the official homepage for the '${args.packageName}' package?`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 4. List Versions Prompt
+server.prompt(
+  'list_versions_prompt',
+  'Generates a request to list all available versions and their publish dates for a specified npm package.',
+  PackageNameArgsSchema.shape,
+  async (args: PackageNameArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request to list versions for the '${args.packageName}' package.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `List all available versions of '${args.packageName}' and their publish dates.`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 5. Get Version Date Prompt
+server.prompt(
+  'get_version_date_prompt',
+  'Generates a request to find the publish date for a specific version of a specified npm package.',
+  GetVersionDateArgsSchema.shape,
+  async (args: GetVersionDateArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request for the publish date of version ${args.version} of '${args.packageName}'.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `What was the publish date of version ${args.version} for '${args.packageName}'?`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 6. Get Downloads Prompt
+server.prompt(
+  'get_downloads_prompt',
+  'Generates a request for the download count of a specified npm package over a specific time period.',
+  GetDownloadsArgsSchema.shape,
+  async (args: GetDownloadsArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request for the download count of '${args.packageName}' in the ${args.timePeriod}.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `How many times was '${args.packageName}' downloaded in the ${args.timePeriod}?`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 7. Get All Downloads Prompt
+server.prompt(
+  'get_all_downloads_prompt',
+  'Generates a request for the download counts of a specified npm package for the last day, week, and month.',
+  PackageNameArgsSchema.shape,
+  async (args: PackageNameArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request for all default download counts for '${args.packageName}'.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `Get the download counts for '${args.packageName}' for the last day, week, and month.`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 8. Audit Project Prompt
+server.prompt(
+  'audit_project_prompt',
+  'Generates a request to audit the dependencies in a specified project directory for security vulnerabilities.',
+  NpmAuditArgsSchema.shape,
+  async (args: NpmAuditArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request to audit dependencies in '${args.projectPath}'.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `Audit the dependencies in the project at '${args.projectPath}' for security vulnerabilities.`
+          }
+        }
+      ]
+    };
+  }
+);
+
+// 9. Simulate Audit Fix Prompt
+server.prompt(
+  'simulate_audit_fix_prompt',
+  'Generates a request to simulate running `npm audit fix` on a specified project directory.',
+  SimulateNpmAuditFixArgsSchema.shape,
+  async (args: SimulateNpmAuditFixArgs): Promise<GetPromptResult> => {
+    return {
+      description: `Generates a request to simulate 'npm audit fix' in '${args.projectPath}'.`,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `Simulate running 'npm audit fix' on the project at '${args.projectPath}' and show me what would change.`
+          }
+        }
+      ]
+    };
   }
 );
 
