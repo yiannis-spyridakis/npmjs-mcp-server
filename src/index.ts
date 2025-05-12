@@ -81,6 +81,47 @@ interface McpDownloadsData {
   source: string;
 }
 
+// --- Interfaces for npm_audit tool results ---
+interface NpmAuditVulnerabilityEntry {
+  package: string;
+  version: string;
+  severity: string;
+  advisoryUrl?: string;
+}
+
+interface NpmAuditSeveritySummary {
+  info?: number;
+  low?: number;
+  moderate?: number;
+  high?: number;
+  critical?: number;
+  [severity: string]: number | undefined; // For flexibility if npm adds new severities
+}
+
+interface NpmAuditOverallSummary {
+  totalVulnerabilities: number;
+  bySeverity: NpmAuditSeveritySummary;
+}
+
+interface McpNpmAuditResult {
+  auditRunDate: string;
+  npmVersion: string;
+  nodeVersion: string;
+  summary: NpmAuditOverallSummary;
+  vulnerabilities: NpmAuditVulnerabilityEntry[];
+  rawAuditReport?: any; // Keep raw report optional and typed as 'any' for now
+}
+
+interface RawAuditVulnerabilityValue {
+  // Helper for parsing raw audit JSON
+  name?: string;
+  installed?: string;
+  version?: string;
+  severity?: string;
+  url?: string;
+}
+// --- End of npm_audit interfaces ---
+
 const NPM_REGISTRY_BASE_URL = 'https://registry.npmjs.org';
 const NPM_DOWNLOADS_API_BASE_URL = 'https://api.npmjs.org/downloads/point';
 
@@ -335,6 +376,18 @@ type NpmAuditArgs = z.infer<typeof NpmAuditArgsSchema>;
 
 // Define Input Schemas for tools (as plain objects for SDK)
 // No more AnyToolArgsSchema - validation will be per-tool in the handler
+const npmAuditInputSchema = {
+  type: 'object',
+  properties: {
+    projectPath: {
+      type: 'string',
+      description: 'The absolute path to the project directory to audit.'
+    }
+  },
+  required: ['projectPath'],
+  additionalProperties: false
+};
+
 const packageNameInputSchema = {
   type: 'object',
   properties: {
@@ -392,17 +445,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       name: 'npm_audit',
       description:
         'Performs an audit of packages in the specified project directory and returns a structured summary of vulnerabilities and metadata',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          projectPath: {
-            type: 'string',
-            description: 'The absolute path to the project directory to audit.'
-          }
-        },
-        required: ['projectPath'],
-        additionalProperties: false
-      }
+      inputSchema: npmAuditInputSchema
     }
   ];
   return { tools };
@@ -435,7 +478,13 @@ server.setRequestHandler(
     };
 
     try {
-      let resultData: any;
+      let resultData:
+        | McpSummaryData
+        | McpVersionsData
+        | McpDownloadsData
+        | McpDetailsData
+        | McpNpmAuditResult; // More specific type for resultData
+
       switch (toolName) {
         case 'get_npm_package_summary': {
           const parseResult = PackageNameArgsSchema.safeParse(args);
@@ -541,35 +590,38 @@ server.setRequestHandler(
               `Failed to parse npm audit JSON output from ${projectPath}.`
             );
           }
+
           // Summarize vulnerabilities
-          const summary = {
-            totalVulnerabilities: auditJson.metadata?.vulnerabilities
-              ? Object.values(auditJson.metadata.vulnerabilities).reduce(
-                  (a: number, b: any) => a + (typeof b === 'number' ? b : 0),
-                  0
-                )
-              : 0,
-            bySeverity: auditJson.metadata?.vulnerabilities || {}
+          const rawSeveritySummary = (auditJson.metadata?.vulnerabilities ||
+            {}) as NpmAuditSeveritySummary;
+          const summary: NpmAuditOverallSummary = {
+            totalVulnerabilities: Object.values(rawSeveritySummary).reduce(
+              (acc: number, count?: number) => acc + (count || 0),
+              0
+            ),
+            bySeverity: rawSeveritySummary
           };
-          // List unique vulnerable packages
-          const vulnerabilities: Array<{
-            package: string;
-            version: string;
-            severity: string;
-            advisoryUrl?: string;
-          }> = [];
+
+          const vulnerabilities: NpmAuditVulnerabilityEntry[] = [];
           if (auditJson.vulnerabilities) {
-            for (const [pkg, vuln] of Object.entries<any>(
-              auditJson.vulnerabilities
+            for (const [
+              pkgName,
+              vulnDetails
+            ] of Object.entries<RawAuditVulnerabilityValue>(
+              auditJson.vulnerabilities as Record<
+                string,
+                RawAuditVulnerabilityValue
+              >
             )) {
               vulnerabilities.push({
-                package: pkg,
-                version: vuln.installed || '',
-                severity: vuln.severity || '',
-                advisoryUrl: vuln.url || undefined
+                package: pkgName, // Use the key as package name
+                version: vulnDetails.installed || vulnDetails.version || '',
+                severity: vulnDetails.severity || 'unknown',
+                advisoryUrl: vulnDetails.url || undefined
               });
             }
           }
+
           resultData = {
             auditRunDate:
               auditJson.metadata?.auditReportCreatedAt ||
@@ -578,8 +630,8 @@ server.setRequestHandler(
             nodeVersion: auditJson.metadata?.nodeVersion || '',
             summary,
             vulnerabilities,
-            rawAuditReport: auditJson // Optionally include full report for advanced consumers
-          };
+            rawAuditReport: auditJson
+          } as McpNpmAuditResult;
           break;
         }
         default:
