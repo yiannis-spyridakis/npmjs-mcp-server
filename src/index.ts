@@ -376,7 +376,7 @@ const fetchPackageDownloads = async (
 const server = new Server(
   {
     name: 'npmjs-mcp-server',
-    version: '0.2.2' // Incremented version for actions parsing improvement
+    version: '1.1.3' // Bump patch version
   },
   {
     capabilities: {
