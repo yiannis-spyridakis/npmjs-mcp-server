@@ -8,6 +8,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import axios, { AxiosError } from 'axios';
+import fs from 'fs';
+import path from 'path';
 
 const encodePackageName = (packageName: string): string => {
   return encodeURIComponent(packageName);
@@ -325,15 +327,14 @@ const PackageDownloadsArgsSchema = z.object({
 });
 type PackageDownloadsArgs = z.infer<typeof PackageDownloadsArgsSchema>;
 
-// Union schema for all tool arguments for parsing in CallTool handler
-const AnyToolArgsSchema = z.union([
-  PackageNameArgsSchema,
-  PackageDownloadsArgsSchema
-  // Add other tool arg schemas here if they differ significantly
-  // For now, all our tools fit one of these two patterns
-]);
+// Zod schema for npm_audit arguments
+const NpmAuditArgsSchema = z.object({
+  projectPath: z.string().min(1, 'Project path cannot be empty')
+});
+type NpmAuditArgs = z.infer<typeof NpmAuditArgsSchema>;
 
 // Define Input Schemas for tools (as plain objects for SDK)
+// No more AnyToolArgsSchema - validation will be per-tool in the handler
 const packageNameInputSchema = {
   type: 'object',
   properties: {
@@ -386,6 +387,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       description:
         'Offers a more comprehensive set of information, including maintainers, repository URL, homepage, and keywords.',
       inputSchema: packageNameInputSchema
+    },
+    {
+      name: 'npm_audit',
+      description:
+        'Performs an audit of packages in the specified project directory and returns a structured summary of vulnerabilities and metadata',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'The absolute path to the project directory to audit.'
+          }
+        },
+        required: ['projectPath'],
+        additionalProperties: false
+      }
     }
   ];
   return { tools };
@@ -402,50 +419,167 @@ server.setRequestHandler(
   }> => {
     const { name: toolName, arguments: args } = request.params;
 
-    // Validate arguments using Zod
-    const parseResult = AnyToolArgsSchema.safeParse(args);
-    if (!parseResult.success) {
+    // Helper for detailed Zod error logging
+    const handleZodError = (
+      toolName: string,
+      parseResult: z.SafeParseError<any>
+    ) => {
+      // Production: The thrown error will be sufficient for the client.
+      // Detailed server-side logging of Zod issues can be verbose for production.
+      // Consider logging `parseResult.error.flatten()` if more detail is needed in server logs without sending full issues to client.
+      const errorDetails = JSON.stringify(parseResult.error.issues, null, 2); // Or a more summarized version
+      // console.error(`[${new Date().toISOString()}] Zod validation failed for tool ${toolName}: ${errorDetails}`); // Removed for production
       throw new Error(
-        `Invalid arguments for tool ${toolName}: ${
-          parseResult.error.flatten().fieldErrors
-        }`
+        `Invalid arguments for tool ${toolName}. Details: ${errorDetails}`
       );
-    }
-    const validatedArgs = parseResult.data;
-
-    // All our current tools require packageName
-    if (!('packageName' in validatedArgs) || !validatedArgs.packageName) {
-      throw new Error(
-        "Argument 'packageName' is required and was not provided or is empty."
-      );
-    }
-    const encodedPackageName = encodePackageName(validatedArgs.packageName);
+    };
 
     try {
       let resultData: any;
       switch (toolName) {
         case 'get_npm_package_summary': {
+          const parseResult = PackageNameArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          // Now parseResult.success is true, and parseResult.data is defined
+          const validatedArgs = parseResult.data!; // Add non-null assertion
+          const encodedPackageName = encodePackageName(
+            validatedArgs.packageName
+          );
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
           resultData = transformDataForSummary(rawData, sourceUrl);
           break;
         }
         case 'get_npm_package_versions': {
+          const parseResult = PackageNameArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          const validatedArgs = parseResult.data!; // Add non-null assertion
+          const encodedPackageName = encodePackageName(
+            validatedArgs.packageName
+          );
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
           resultData = transformDataForVersions(rawData, sourceUrl);
           break;
         }
         case 'get_npm_package_downloads': {
-          const period =
-            'period' in validatedArgs ? validatedArgs.period : undefined;
-          resultData = await fetchPackageDownloads(encodedPackageName, period);
+          const parseResult = PackageDownloadsArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          const validatedArgs = parseResult.data!; // Add non-null assertion
+          const encodedPackageName = encodePackageName(
+            validatedArgs.packageName
+          );
+          resultData = await fetchPackageDownloads(
+            encodedPackageName,
+            validatedArgs.period
+          );
           break;
         }
         case 'get_npm_package_details': {
+          const parseResult = PackageNameArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          const validatedArgs = parseResult.data!; // Add non-null assertion
+          const encodedPackageName = encodePackageName(
+            validatedArgs.packageName
+          );
           const rawData = await fetchPackageData(encodedPackageName);
           const sourceUrl = `${NPM_REGISTRY_BASE_URL}/${encodedPackageName}`;
           resultData = transformDataForDetails(rawData, sourceUrl);
+          break;
+        }
+        case 'npm_audit': {
+          const parseResult = NpmAuditArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          const validatedArgs = parseResult.data!; // Add non-null assertion
+          const projectPath = validatedArgs.projectPath;
+
+          // Check for package-lock.json
+          const lockfilePath = path.join(projectPath, 'package-lock.json');
+          if (!fs.existsSync(lockfilePath)) {
+            throw new Error(
+              `npm audit requires a package-lock.json file in the target directory '${projectPath}'. Please run 'npm install' or 'npm i --package-lock-only' in that directory first.`
+            );
+          }
+
+          const { execSync } = await import('child_process');
+          let auditRaw: string;
+          console.error(
+            `[${new Date().toISOString()}] Running npm audit in directory: ${projectPath}`
+          );
+          try {
+            auditRaw = execSync('npm audit --json', {
+              encoding: 'utf-8',
+              cwd: projectPath // Execute in the specified project directory
+            });
+          } catch (err: any) {
+            // npm audit returns non-zero exit code if vulnerabilities are found, but still outputs JSON
+            if (err.stdout) {
+              auditRaw = err.stdout;
+            } else {
+              throw new Error(
+                `Failed to run 'npm audit --json' in ${projectPath}: ${
+                  err.message || err
+                }`
+              );
+            }
+          }
+          let auditJson: any;
+          try {
+            auditJson = JSON.parse(auditRaw);
+          } catch (err) {
+            throw new Error(
+              `Failed to parse npm audit JSON output from ${projectPath}.`
+            );
+          }
+          // Summarize vulnerabilities
+          const summary = {
+            totalVulnerabilities: auditJson.metadata?.vulnerabilities
+              ? Object.values(auditJson.metadata.vulnerabilities).reduce(
+                  (a: number, b: any) => a + (typeof b === 'number' ? b : 0),
+                  0
+                )
+              : 0,
+            bySeverity: auditJson.metadata?.vulnerabilities || {}
+          };
+          // List unique vulnerable packages
+          const vulnerabilities: Array<{
+            package: string;
+            version: string;
+            severity: string;
+            advisoryUrl?: string;
+          }> = [];
+          if (auditJson.vulnerabilities) {
+            for (const [pkg, vuln] of Object.entries<any>(
+              auditJson.vulnerabilities
+            )) {
+              vulnerabilities.push({
+                package: pkg,
+                version: vuln.installed || '',
+                severity: vuln.severity || '',
+                advisoryUrl: vuln.url || undefined
+              });
+            }
+          }
+          resultData = {
+            auditRunDate:
+              auditJson.metadata?.auditReportCreatedAt ||
+              new Date().toISOString(),
+            npmVersion: auditJson.metadata?.npmVersion || '',
+            nodeVersion: auditJson.metadata?.nodeVersion || '',
+            summary,
+            vulnerabilities,
+            rawAuditReport: auditJson // Optionally include full report for advanced consumers
+          };
           break;
         }
         default:
@@ -458,19 +592,20 @@ server.setRequestHandler(
     } catch (error) {
       if (error instanceof NpmApiError) {
         // Re-throw with a simple message; SDK handles formatting
+        // NpmApiError messages often include package name or relevant context.
+        // validatedArgs is not in scope here, so we log toolName and the error's own message.
         console.error(
-          `[${new Date().toISOString()}] NpmApiError in tool ${toolName} for ${
-            validatedArgs.packageName
-          }: ${error.message} (Code: ${error.code}, Status: ${
-            error.statusCode
-          })`
+          `[${new Date().toISOString()}] NpmApiError in tool ${toolName}: ${
+            error.message
+          } (Code: ${error.code}, Status: ${error.statusCode})`
         );
         throw new Error(error.message);
       }
+      // Log other errors - validatedArgs is not in scope here, log toolName only
       console.error(
-        `[${new Date().toISOString()}] Unknown error in tool ${toolName} for ${
-          validatedArgs.packageName
-        }: ${(error as Error).message}`
+        `[${new Date().toISOString()}] Unknown error in tool ${toolName}: ${
+          (error as Error).message
+        }`
       );
       throw error; // Re-throw other errors
     }
