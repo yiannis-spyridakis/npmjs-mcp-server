@@ -376,7 +376,7 @@ const fetchPackageDownloads = async (
 const server = new Server(
   {
     name: 'npmjs-mcp-server',
-    version: '0.2.1' // Incremented version for bug fix
+    version: '0.2.2' // Incremented version for actions parsing improvement
   },
   {
     capabilities: {
@@ -756,16 +756,61 @@ server.setRequestHandler(
           }
 
           // Parse the JSON output - structure based on observed npm behavior
-          const actions: NpmAuditFixAction[] = (
-            simulationJson.actions || []
-          ).map((action: any) => ({
-            action: action.action,
-            name: action.module, // npm often uses 'module' here
-            version: action.target, // Target version
-            oldVersion: action.resolves?.[0]?.from, // Attempt to find old version
-            isMajor: action.isMajor,
-            path: action.resolves?.[0]?.path // Optional path
-          }));
+          let actions: NpmAuditFixAction[] = [];
+          if (simulationJson.actions && Array.isArray(simulationJson.actions)) {
+            actions = simulationJson.actions.map((action: any) => {
+              // Defensive parsing for action properties
+              const actionType =
+                typeof action.action === 'string'
+                  ? action.action.toLowerCase()
+                  : 'unknown';
+              const name =
+                typeof action.module === 'string'
+                  ? action.module
+                  : typeof action.name === 'string'
+                  ? action.name
+                  : 'unknown';
+              const version =
+                typeof action.target === 'string' ? action.target : undefined;
+              let oldVersion: string | undefined;
+              if (
+                action.resolves &&
+                Array.isArray(action.resolves) &&
+                action.resolves.length > 0 &&
+                action.resolves[0]
+              ) {
+                oldVersion =
+                  typeof action.resolves[0].from === 'string'
+                    ? action.resolves[0].from
+                    : undefined;
+              }
+              const isMajor =
+                typeof action.isMajor === 'boolean'
+                  ? action.isMajor
+                  : undefined;
+              let path: string | undefined;
+              if (
+                action.resolves &&
+                Array.isArray(action.resolves) &&
+                action.resolves.length > 0 &&
+                action.resolves[0]
+              ) {
+                path =
+                  typeof action.resolves[0].path === 'string'
+                    ? action.resolves[0].path
+                    : undefined;
+              }
+
+              return {
+                action: actionType as NpmAuditFixAction['action'], // Cast, assuming valid types after check
+                name,
+                version,
+                oldVersion,
+                isMajor,
+                path
+              };
+            });
+          }
 
           const summary: NpmAuditFixSummary = {
             added: simulationJson.added || 0,
