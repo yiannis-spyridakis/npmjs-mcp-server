@@ -4,7 +4,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-  CallToolRequest
+  CallToolRequest,
+  ListPromptsRequestSchema, // Added
+  GetPromptRequestSchema // Added
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import axios, { AxiosError } from 'axios';
@@ -376,15 +378,40 @@ const fetchPackageDownloads = async (
 const server = new Server(
   {
     name: 'npmjs-mcp-server',
-    version: '1.1.3' // Bump patch version
+    version: '1.1.4' // Implement prompt handlers
   },
   {
     capabilities: {
       resources: {}, // No resources defined for now
-      tools: {} // Tools will be added via setRequestHandler
+      tools: {}, // Tools will be added via setRequestHandler
+      prompts: {} // Prompts will be added via setRequestHandler
     }
   }
 );
+
+// Define prompts separately for handler access
+// Add index signature {[key: string]: PromptDefinition | undefined} for type safety
+const SERVER_PROMPTS: {
+  [key: string]:
+    | { name: string; description: string; template: string; inputSchema: any }
+    | undefined;
+} = {
+  'placeholder-prompt': {
+    name: 'placeholder-prompt',
+    description: 'A placeholder prompt for demonstration purposes.',
+    template: 'This is a placeholder template for {{variable}}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        variable: {
+          type: 'string',
+          description: 'A placeholder variable.'
+        }
+      },
+      required: ['variable']
+    }
+  }
+};
 
 // --- Zod Schemas for Tool Arguments ---
 const PackageNameArgsSchema = z.object({
@@ -503,7 +530,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       inputSchema: simulateNpmAuditFixInputSchema
     }
   ];
-  return { tools };
+  return { tools }; // Return only tools here, prompts are handled below
+});
+
+// ListPrompts Handler (Corrected)
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  // Return prompts defined in the constant
+  return { prompts: Object.values(SERVER_PROMPTS) };
+});
+
+// GetPrompt Handler
+server.setRequestHandler(GetPromptRequestSchema, async request => {
+  const promptName = request.params.name;
+  // Access the constant instead of server.capabilities
+  const promptDefinition = SERVER_PROMPTS[promptName];
+
+  if (!promptDefinition) {
+    throw new Error(`Prompt not found: ${promptName}`);
+  }
+
+  // For the placeholder, just return a simple message or empty structure
+  // In a real implementation, this would generate the prompt messages based on arguments
+  if (promptName === 'placeholder-prompt') {
+    return {
+      description: promptDefinition.description,
+      messages: [
+        {
+          role: 'system',
+          content: {
+            type: 'text',
+            text: `This is a placeholder prompt named '${promptName}'. It is not fully implemented.`
+          }
+        }
+      ]
+      // Alternatively, return an empty messages array:
+      // messages: []
+    };
+  }
+
+  // Handle other prompts if they were implemented
+  throw new Error(`Prompt implementation not found for: ${promptName}`);
 });
 
 // CallTool Handler
