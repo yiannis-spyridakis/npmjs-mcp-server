@@ -1,4 +1,4 @@
-# NPMJS Model Context Protocol (MCP) Server
+# NPMJS Model Context Protocol (MCP) Server (v1.1.5)
 
 ## 1. Project Purpose
 
@@ -66,7 +66,7 @@ This server provides tools that can be called using an MCP client.
 
 ### Tool: `get_npm_package_summary`
 
-- **Description:** Provides essential package details: name, latest version, description, publish date of the latest version, license, homepage, and repository URL.
+- **Description:** Provides essential package details: name, latest version, description, publish date of the latest version, license, homepage, and repository URL (if available).
 - **Input Schema:**
   ```json
   {
@@ -137,7 +137,137 @@ This server provides tools that can be called using an MCP client.
   }
   ```
 
-## 5. Example Tool Usage and Responses
+## 5. Available MCP Prompts
+
+In addition to tools, this server provides prompts that can be used by an MCP client to generate specific user requests based on provided variables, simplifying common interactions.
+
+### Prompt: `get_summary_prompt`
+
+- **Description:** Generates a request to get a quick summary of a specified npm package.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    }
+  }
+  ```
+
+### Prompt: `get_details_prompt`
+
+- **Description:** Generates a request for full details of a specified npm package, including maintainers and repository URL.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    }
+  }
+  ```
+
+### Prompt: `find_homepage_prompt`
+
+- **Description:** Generates a request to find the official homepage for a specified npm package.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    }
+  }
+  ```
+
+### Prompt: `list_versions_prompt`
+
+- **Description:** Generates a request to list all available versions and their publish dates for a specified npm package.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    }
+  }
+  ```
+
+### Prompt: `get_version_date_prompt`
+
+- **Description:** Generates a request to find the publish date for a specific version of a specified npm package.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    },
+    "version": {
+      "type": "string",
+      "description": "The specific version string (e.g., '16.8.0')"
+    }
+  }
+  ```
+
+### Prompt: `get_downloads_prompt`
+
+- **Description:** Generates a request for the download count of a specified npm package over a specific time period.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    },
+    "timePeriod": {
+      "type": "string",
+      "enum": ["last-day", "last-week", "last-month"],
+      "description": "The time period for download counts"
+    }
+  }
+  ```
+
+### Prompt: `get_all_downloads_prompt`
+
+- **Description:** Generates a request for the download counts of a specified npm package for the last day, week, and month.
+- **Input Schema:**
+  ```json
+  {
+    "packageName": {
+      "type": "string",
+      "description": "The name of the npm package"
+    }
+  }
+  ```
+
+### Prompt: `audit_project_prompt`
+
+- **Description:** Generates a request to audit the dependencies in a specified project directory for security vulnerabilities.
+- **Input Schema:**
+  ```json
+  {
+    "projectPath": {
+      "type": "string",
+      "description": "The path to the project directory (e.g., '.', '../my-app')"
+    }
+  }
+  ```
+
+### Prompt: `simulate_audit_fix_prompt`
+
+- **Description:** Generates a request to simulate running `npm audit fix` on a specified project directory.
+- **Input Schema:**
+  ```json
+  {
+    "projectPath": {
+      "type": "string",
+      "description": "The path to the project directory (e.g., '.', '../my-app')"
+    }
+  }
+  ```
+
+## 6. Example Tool Usage and Responses
 
 The following examples illustrate how to call a tool (conceptual, actual client usage may vary) and the expected `data` portion of the successful MCP `CallToolResponse`. The MCP SDK handles the full response envelope (version, timestamp, etc.). The `data` field in the MCP response will contain a `content` array, where the first element is an object of type `text` and its `text` property holds a JSON string of the results shown below.
 
@@ -282,3 +412,77 @@ If a tool call fails (e.g., package not found, invalid arguments), the MCP serve
 ```
 
 If a required argument like `packageName` is missing, the tool handler will throw an error, resulting in a similar MCP error response.
+
+## 7. Example Prompt Usage
+
+The following examples show how to use the available prompts by providing arguments. The server will return a `GetPromptResponse` containing the generated user message.
+
+### Example: Using `get_summary_prompt`
+
+**Prompt Call Arguments:**
+
+```json
+{ "packageName": "react" }
+```
+
+**Generated User Message (`messages[0].content.text`):**
+
+```
+Get a quick summary of the 'react' npm package.
+```
+
+### Example: Using `get_version_date_prompt`
+
+**Prompt Call Arguments:**
+
+```json
+{ "packageName": "lodash", "version": "4.17.21" }
+```
+
+**Generated User Message (`messages[0].content.text`):**
+
+```
+What was the publish date of version 4.17.21 for 'lodash'?
+```
+
+### Example: Using `get_downloads_prompt`
+
+**Prompt Call Arguments:**
+
+```json
+{ "packageName": "axios", "timePeriod": "last-week" }
+```
+
+**Generated User Message (`messages[0].content.text`):**
+
+```
+How many times was 'axios' downloaded in the last-week?
+```
+
+### Example: Using `audit_project_prompt`
+
+**Prompt Call Arguments:**
+
+```json
+{ "projectPath": "../my-frontend-app" }
+```
+
+**Generated User Message (`messages[0].content.text`):**
+
+```
+Audit the dependencies in the project at '../my-frontend-app' for security vulnerabilities.
+```
+
+### Example: Using `simulate_audit_fix_prompt`
+
+**Prompt Call Arguments:**
+
+```json
+{ "projectPath": "." }
+```
+
+**Generated User Message (`messages[0].content.text`):**
+
+```
+Simulate running 'npm audit fix' on the project at '.' and show me what would change.
+```
