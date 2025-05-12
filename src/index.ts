@@ -122,6 +122,36 @@ interface RawAuditVulnerabilityValue {
 }
 // --- End of npm_audit interfaces ---
 
+// --- Interfaces for simulate_npm_audit_fix tool results ---
+interface NpmAuditFixAction {
+  action: 'add' | 'remove' | 'change' | 'install' | 'update'; // npm uses various terms
+  name: string;
+  version?: string; // Target version for add/change/update
+  oldVersion?: string; // Source version for change/update
+  isMajor?: boolean; // Indicates if it's a major version change
+  path?: string; // Sometimes included in npm output
+}
+
+interface NpmAuditFixSummary {
+  added: number;
+  removed: number;
+  changed: number;
+  audited: number;
+  funding: number;
+}
+
+interface McpSimulateAuditFixResult {
+  simulationRunDate: string;
+  npmVersion: string;
+  nodeVersion: string;
+  summary: NpmAuditFixSummary;
+  actions: NpmAuditFixAction[];
+  // Warnings like ERESOLVE are typically logged to stderr and not in the JSON output
+  // We might need a different approach if capturing stderr is required.
+  rawSimulationOutput?: any; // Keep raw report optional
+}
+// --- End of simulate_npm_audit_fix interfaces ---
+
 const NPM_REGISTRY_BASE_URL = 'https://registry.npmjs.org';
 const NPM_DOWNLOADS_API_BASE_URL = 'https://api.npmjs.org/downloads/point';
 
@@ -346,7 +376,7 @@ const fetchPackageDownloads = async (
 const server = new Server(
   {
     name: 'npmjs-mcp-server',
-    version: '0.1.0'
+    version: '0.2.1' // Incremented version for bug fix
   },
   {
     capabilities: {
@@ -374,6 +404,12 @@ const NpmAuditArgsSchema = z.object({
 });
 type NpmAuditArgs = z.infer<typeof NpmAuditArgsSchema>;
 
+// Zod schema for simulate_npm_audit_fix arguments
+const SimulateNpmAuditFixArgsSchema = z.object({
+  projectPath: z.string().min(1, 'Project path cannot be empty')
+});
+type SimulateNpmAuditFixArgs = z.infer<typeof SimulateNpmAuditFixArgsSchema>;
+
 // Define Input Schemas for tools (as plain objects for SDK)
 // No more AnyToolArgsSchema - validation will be per-tool in the handler
 const npmAuditInputSchema = {
@@ -382,6 +418,19 @@ const npmAuditInputSchema = {
     projectPath: {
       type: 'string',
       description: 'The absolute path to the project directory to audit.'
+    }
+  },
+  required: ['projectPath'],
+  additionalProperties: false
+};
+
+const simulateNpmAuditFixInputSchema = {
+  type: 'object',
+  properties: {
+    projectPath: {
+      type: 'string',
+      description:
+        'The absolute path to the project directory to simulate `npm audit fix` for.'
     }
   },
   required: ['projectPath'],
@@ -446,6 +495,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       description:
         'Performs an audit of packages in the specified project directory and returns a structured summary of vulnerabilities and metadata',
       inputSchema: npmAuditInputSchema
+    },
+    {
+      name: 'simulate_npm_audit_fix',
+      description:
+        'Simulates `npm audit fix --dry-run` in the specified project directory and returns a structured summary of potential changes.',
+      inputSchema: simulateNpmAuditFixInputSchema
     }
   ];
   return { tools };
@@ -483,7 +538,8 @@ server.setRequestHandler(
         | McpVersionsData
         | McpDownloadsData
         | McpDetailsData
-        | McpNpmAuditResult; // More specific type for resultData
+        | McpNpmAuditResult
+        | McpSimulateAuditFixResult; // Added new result type
 
       switch (toolName) {
         case 'get_npm_package_summary': {
@@ -632,6 +688,101 @@ server.setRequestHandler(
             vulnerabilities,
             rawAuditReport: auditJson
           } as McpNpmAuditResult;
+          break;
+        }
+        case 'simulate_npm_audit_fix': {
+          const parseResult = SimulateNpmAuditFixArgsSchema.safeParse(args);
+          if (!parseResult.success) {
+            handleZodError(toolName, parseResult);
+          }
+          const validatedArgs = parseResult.data!;
+          const projectPath = validatedArgs.projectPath;
+
+          // Check for package-lock.json
+          const lockfilePath = path.join(projectPath, 'package-lock.json');
+          if (!fs.existsSync(lockfilePath)) {
+            throw new Error(
+              `npm audit fix requires a package-lock.json file in the target directory '${projectPath}'. Please run 'npm install' or 'npm i --package-lock-only' in that directory first.`
+            );
+          }
+
+          const { execSync } = await import('child_process');
+          let simulationRaw: string;
+          console.error(
+            `[${new Date().toISOString()}] Running npm audit fix --dry-run --json in directory: ${projectPath}`
+          );
+          try {
+            // Use --json flag for structured output
+            simulationRaw = execSync('npm audit fix --dry-run --json', {
+              encoding: 'utf-8',
+              cwd: projectPath, // Execute in the specified project directory
+              stdio: ['pipe', 'pipe', 'pipe'] // Capture stdout, stderr
+            });
+          } catch (err: any) {
+            // npm audit fix --dry-run might exit non-zero even if it produces JSON
+            if (err.stdout) {
+              simulationRaw = err.stdout;
+              console.error(
+                `[${new Date().toISOString()}] npm audit fix --dry-run exited non-zero but produced output in ${projectPath}. Stderr: ${
+                  err.stderr || '(no stderr)'
+                }`
+              );
+            } else {
+              throw new Error(
+                `Failed to run 'npm audit fix --dry-run --json' in ${projectPath}: ${
+                  err.message || err
+                }. Stderr: ${err.stderr || '(no stderr)'}`
+              );
+            }
+          }
+
+          let simulationJson: any;
+          try {
+            // Find the start of the JSON object
+            const jsonStartIndex = simulationRaw.indexOf('{');
+            if (jsonStartIndex === -1) {
+              throw new Error(
+                `Could not find start of JSON object in npm audit fix --dry-run output from ${projectPath}. Raw output: ${simulationRaw}`
+              );
+            }
+            const jsonString = simulationRaw.substring(jsonStartIndex);
+            simulationJson = JSON.parse(jsonString);
+          } catch (err) {
+            throw new Error(
+              `Failed to parse npm audit fix --dry-run JSON output from ${projectPath}. Error: ${
+                (err as Error).message
+              }. Raw output fragment: ${simulationRaw.substring(0, 500)}...` // Include fragment
+            );
+          }
+
+          // Parse the JSON output - structure based on observed npm behavior
+          const actions: NpmAuditFixAction[] = (
+            simulationJson.actions || []
+          ).map((action: any) => ({
+            action: action.action,
+            name: action.module, // npm often uses 'module' here
+            version: action.target, // Target version
+            oldVersion: action.resolves?.[0]?.from, // Attempt to find old version
+            isMajor: action.isMajor,
+            path: action.resolves?.[0]?.path // Optional path
+          }));
+
+          const summary: NpmAuditFixSummary = {
+            added: simulationJson.added || 0,
+            removed: simulationJson.removed || 0,
+            changed: simulationJson.changed || 0,
+            audited: simulationJson.audited || 0,
+            funding: simulationJson.funding || 0
+          };
+
+          resultData = {
+            simulationRunDate: new Date().toISOString(), // No reliable timestamp in output
+            npmVersion: simulationJson.metadata?.npmVersion || '', // Attempt to get metadata
+            nodeVersion: simulationJson.metadata?.nodeVersion || '',
+            summary,
+            actions,
+            rawSimulationOutput: simulationJson // Include raw for debugging
+          } as McpSimulateAuditFixResult;
           break;
         }
         default:
